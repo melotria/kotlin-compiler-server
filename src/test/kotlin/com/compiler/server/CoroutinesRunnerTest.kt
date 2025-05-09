@@ -288,10 +288,75 @@ class CoroutinesRunnerTest : BaseExecutorTest() {
 
 
   @Test
-  fun `base coroutines test `() {
+  fun `flow api basic test`() {
     run(
-      code = "",
+      code = "import kotlinx.coroutines.*\nimport kotlinx.coroutines.flow.*\n\nfun main() = runBlocking {\n    // Create a flow of numbers 1..3\n    val flow = flow {\n        for (i in 1..3) {\n            delay(100) // pretend we're doing something useful\n            emit(i) // emit next value\n        }\n    }\n    \n    // Collect the flow\n    flow.collect { value ->\n        println(\"Received: \${value}\")\n    }\n}",
+      contains = "Received: 1\nReceived: 2\nReceived: 3\n"
+    )
+  }
+
+  @Test
+  fun `flow api transformation test`() {
+    run(
+      code = "import kotlinx.coroutines.*\nimport kotlinx.coroutines.flow.*\n\nfun main() = runBlocking {\n    // Create a flow and apply transformations\n    (1..3).asFlow()\n        .map { it * it } // square the numbers\n        .filter { it > 1 } // filter out 1\n        .collect { value ->\n            println(\"Processed value: \$value\")\n        }\n}",
+      contains = "Processed value: 4\nProcessed value: 9\n"
+    )
+  }
+
+  @Test
+  fun `flow api terminal operators test`() {
+    run(
+      code = "import kotlinx.coroutines.*\nimport kotlinx.coroutines.flow.*\n\nfun main() = runBlocking {\n    val sum = (1..5).asFlow()\n        .map { it * it }\n        .reduce { a, b -> a + b }\n    \n    println(\"Sum of squares: \$sum\")\n    \n    val list = (1..3).asFlow()\n        .toList()\n    \n    println(\"As list: \$list\")\n}",
+      contains = "Sum of squares: 55\nAs list: [1, 2, 3]\n"
+    )
+  }
+
+  @Test
+  fun `coroutine channels basic test`() {
+    val result = run(
+      code = "import kotlinx.coroutines.*\nimport kotlinx.coroutines.channels.*\n\nfun main() = runBlocking {\n    val channel = Channel<Int>()\n    \n    launch {\n        // Send elements to the channel\n        for (i in 1..3) {\n            channel.send(i)\n            println(\"Sent: \$i\")\n        }\n        channel.close() // close the channel when done\n    }\n    \n    // Receive elements from the channel\n    for (element in channel) {\n        println(\"Received: \$element\")\n    }\n    \n    println(\"Done!\")\n}",
       contains = ""
+    )
+
+    // Check that all expected lines are present, regardless of order
+    Assertions.assertTrue(result.text.contains("Sent: 1"))
+    Assertions.assertTrue(result.text.contains("Sent: 2"))
+    Assertions.assertTrue(result.text.contains("Sent: 3"))
+    Assertions.assertTrue(result.text.contains("Received: 1"))
+    Assertions.assertTrue(result.text.contains("Received: 2"))
+    Assertions.assertTrue(result.text.contains("Received: 3"))
+    Assertions.assertTrue(result.text.contains("Done!"))
+  }
+
+  @Test
+  fun `coroutine select expression test`() {
+    run(
+      code = "import kotlinx.coroutines.*\nimport kotlinx.coroutines.channels.*\nimport kotlinx.coroutines.selects.*\n\nfun main() = runBlocking {\n    val channel1 = Channel<String>()\n    val channel2 = Channel<String>()\n    \n    launch {\n        delay(100)\n        channel1.send(\"from channel1\")\n    }\n    \n    launch {\n        delay(50)\n        channel2.send(\"from channel2\")\n    }\n    \n    // Select from the first channel that becomes available\n    val result = select<String> {\n        channel1.onReceive { it }\n        channel2.onReceive { it }\n    }\n    \n    println(\"Result: \$result\")\n    \n    // Clean up\n    channel1.cancel()\n    channel2.cancel()\n}",
+      contains = "Result: from channel2\n"
+    )
+  }
+
+  @Test
+  fun `supervisor scope exception handling test`() {
+    run(
+      code = "import kotlinx.coroutines.*\n\nfun main() = runBlocking {\n    supervisorScope {\n        val job1 = launch {\n            delay(100)\n            println(\"Child 1 completed successfully\")\n        }\n        \n        val job2 = launch {\n            delay(50)\n            throw RuntimeException(\"Child 2 failed\")\n        }\n        \n        try {\n            job1.join()\n            job2.join()\n        } catch (e: Exception) {\n            println(\"Caught exception: \$e.message\")\n        }\n        \n        delay(200)\n        println(\"Child 1 is \${if (job1.isActive) \"still active\" else \"not active\"}\")\n        println(\"Child 2 is \${if (job2.isActive) \"still active\" else \"not active\"}\")\n        println(\"Supervisor scope completed\")\n    }\n}",
+      contains = "Child 1 completed successfully\nChild 1 is not active\nChild 2 is not active\nSupervisor scope completed\n"
+    )
+  }
+
+  @Test
+  fun `shared flow test`() {
+    run(
+      code = "import kotlinx.coroutines.*\nimport kotlinx.coroutines.flow.*\n\nfun main() = runBlocking {\n    // Create a shared flow with replay of 2 items\n    val sharedFlow = MutableSharedFlow<Int>(replay = 2)\n    \n    // Producer\n    launch {\n        for (i in 1..3) {\n            println(\"Emitting: \$i\")\n            sharedFlow.emit(i)\n            delay(100)\n        }\n    }\n    \n    // Give some time for emissions\n    delay(250)\n    \n    // First subscriber - will get the last 2 items from replay cache (2, 3)\n    // and any new emissions\n    launch {\n        sharedFlow.collect { value ->\n            println(\"Subscriber 1 received: \$value\")\n            if (value >= 3) {\n                // Cancel collection after receiving 3\n                currentCoroutineContext().cancel()\n            }\n        }\n    }.join()\n    \n    println(\"Done!\")\n}",
+      contains = "Emitting: 1\nEmitting: 2\nEmitting: 3\nSubscriber 1 received: 2\nSubscriber 1 received: 3\nDone!\n"
+    )
+  }
+
+  @Test
+  fun `state flow test`() {
+    run(
+      code = "import kotlinx.coroutines.*\nimport kotlinx.coroutines.flow.*\n\nfun main() = runBlocking {\n    // Create a state flow with initial value 0\n    val stateFlow = MutableStateFlow(0)\n    \n    // Collector\n    val job = launch {\n        stateFlow.collect { value ->\n            println(\"State changed to: \$value\")\n        }\n    }\n    \n    // Update the state\n    delay(100)\n    stateFlow.value = 1\n    delay(100)\n    stateFlow.value = 2\n    delay(100)\n    stateFlow.value = 2 // Same value, won't trigger collector\n    delay(100)\n    stateFlow.value = 3\n    \n    delay(100)\n    job.cancel()\n    println(\"Done!\")\n}",
+      contains = "State changed to: 0\nState changed to: 1\nState changed to: 2\nState changed to: 3\nDone!\n"
     )
   }
 
