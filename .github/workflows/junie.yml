@@ -1,12 +1,9 @@
-# check-updates: false
-
 name: Junie
 run-name: Junie run ${{ inputs.run_id }}
 
 permissions:
   contents: write
   pull-requests: write
-  packages: read
 
 on:
   workflow_dispatch:
